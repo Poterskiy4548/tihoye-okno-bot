@@ -43,7 +43,6 @@ def init_db():
 
 init_db()
 
-# ---------- Вспомогательные функции ----------
 def get_free_slots(target_date: str) -> list:
     day_of_week = datetime.strptime(target_date, "%Y-%m-%d").weekday()
     if day_of_week == 4:
@@ -52,7 +51,6 @@ def get_free_slots(target_date: str) -> list:
         all_slots = SLOTS_SAT
     else:
         return []
-
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT time FROM appointments WHERE date=? AND user_id IS NOT NULL", (target_date,))
@@ -166,7 +164,6 @@ async def back_button(update: Update, context):
 
 # ---------- Календарь ----------
 async def show_calendar(update: Update, context, year=None, month=None, day=None):
-    """Календарь с сеткой дней (как настоящий)."""
     if update.callback_query:
         query = update.callback_query
         await query.answer()
@@ -189,7 +186,6 @@ async def show_calendar(update: Update, context, year=None, month=None, day=None
         today = date.today()
         year, month, _ = today.year, today.month, today.day
 
-    cal_text = ""
     cal_matrix = cal.monthcalendar(year, month)
     keyboard = []
     header = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
@@ -266,7 +262,6 @@ async def book_slot_handler(update: Update, context):
         await query.answer("Этот слот только что заняли 😔", show_alert=True)
         await show_calendar(update, context)
         return
-
     book_slot(target_date, time, user.id, user.username or user.full_name)
     date_obj = datetime.strptime(target_date, "%Y-%m-%d")
     confirm_text = (
@@ -278,17 +273,17 @@ async def book_slot_handler(update: Update, context):
     keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="back")]]
     await query.edit_message_text(confirm_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- Админ‑панель ----------
+# ---------- Админ-панель ----------
 ADMIN_EDIT_DATE, ADMIN_EDIT_TIME = range(2)
 
 async def admin_panel(update: Update, context):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ У вас нет доступа.")
+        await context.bot.send_message(user.id, "⛔ У вас нет доступа.")
         return
     appointments = get_upcoming_appointments()
     if not appointments:
-        await update.message.reply_text("📭 Пока нет записей.")
+        await context.bot.send_message(user.id, "📭 Пока нет записей.")
         return
     text = "<b>📋 Предстоящие записи:</b>\n\n"
     keyboard = []
@@ -301,7 +296,7 @@ async def admin_panel(update: Update, context):
         ]
         keyboard.append(row)
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back")])
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await context.bot.send_message(user.id, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def admin_edit_appointment(update: Update, context):
     query = update.callback_query
@@ -396,12 +391,6 @@ async def cancel_appointment(update: Update, context):
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Админ-панель", callback_data="admin")]])
     )
 
-async def admin_back_button(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-    await admin_panel(update, context)
-
-# ---------- Заглушка ----------
 async def any_message(update: Update, context):
     text = (
         "🤖 Я пока умею только отвечать по кнопкам.\n"
@@ -442,7 +431,6 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(cancel_appointment, pattern="^cancel_"))
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin$"))
     app.add_handler(CallbackQueryHandler(admin_edit_appointment, pattern="^adm_edit_"))
-    app.add_handler(CallbackQueryHandler(admin_back_button, pattern="^adm_back$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, any_message))
 
     app.run_polling()
