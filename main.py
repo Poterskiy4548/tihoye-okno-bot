@@ -30,7 +30,7 @@ MONTHS_RU = [
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ---------- База данных ----------
+# ---------- База данных (создаётся заново при удалении файла) ----------
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -42,8 +42,8 @@ def init_db():
         username TEXT,
         booked_at TEXT
     )""")
-    # Индекс для быстрой проверки уникальности слота
-    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_date_time ON appointments(date, time) WHERE user_id IS NOT NULL")
+    # Индекс для гарантии уникальности слота
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_slot ON appointments(date, time) WHERE user_id IS NOT NULL")
     conn.commit()
     conn.close()
 
@@ -65,10 +65,8 @@ def get_free_slots(target_date: str) -> list:
     return [s for s in all_slots if s not in booked]
 
 def book_slot(target_date: str, time: str, user_id: int, username: str) -> bool:
-    """Возвращает True, если бронь успешна, и False, если слот уже занят."""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # Проверяем, не занят ли слот
     c.execute("SELECT user_id FROM appointments WHERE date=? AND time=? AND user_id IS NOT NULL", (target_date, time))
     if c.fetchone():
         conn.close()
@@ -89,6 +87,7 @@ def cancel_slot(appointment_id: int):
 def get_upcoming_appointments():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    # Выбираем только будущие даты, где есть user_id
     c.execute("SELECT id, date, time, user_id, username FROM appointments WHERE date >= date('now') AND user_id IS NOT NULL ORDER BY date, time")
     rows = c.fetchall()
     conn.close()
@@ -203,7 +202,6 @@ async def show_calendar(update: Update, context, year=None, month=None, day=None
     keyboard = []
     header = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     keyboard.append([InlineKeyboardButton(h, callback_data="none") for h in header])
-    today = date.today()
     for week in cal_matrix:
         row = []
         for d in week:
