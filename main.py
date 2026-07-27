@@ -83,12 +83,16 @@ def get_upcoming_appointments():
 
 # ---------- Главное меню ----------
 async def show_main_menu(update: Update, context):
+    user = update.effective_user
+    is_admin = user.id in ADMIN_IDS
     keyboard = [
         [InlineKeyboardButton("💰 Цены", callback_data="prices")],
         [InlineKeyboardButton("📅 Слоты / Запись", callback_data="calendar")],
         [InlineKeyboardButton("📝 Как записаться", callback_data="howto")],
         [InlineKeyboardButton("👋 Привет, я тут", url=PSY_LINK)],
     ]
+    if is_admin:
+        keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data="admin")])
     text = (
         "🕊 <b>Тихое окно</b>\n"
         "кабинет психолога-консультанта\n\n"
@@ -131,13 +135,23 @@ async def button_handler(update: Update, context):
         ]
         await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
     elif query.data == "calendar":
-        await show_calendar(query)
+        await show_calendar(update, context)
 
 async def back_button(update: Update, context):
     await show_main_menu(update, context)
 
 # ---------- Календарь ----------
-async def show_calendar(query, offset=0):
+async def show_calendar(update: Update, context, offset=0):
+    """Рисует календарь с навигацией. offset – смещение недель."""
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        # Если пришли из колбэка с cal_offset_, извлекаем offset из данных
+        if query.data and query.data.startswith("cal_offset_"):
+            offset = int(query.data.split("_")[-1])
+    else:
+        query = update.callback_query
+
     today = date.today()
     dates = []
     for i in range(offset * 7, (offset + 4) * 7):
@@ -179,11 +193,11 @@ async def calendar_pick(update: Update, context):
         await query.answer("На эту дату все слоты заняты 😔", show_alert=True)
         return
 
-    # Сетка кнопок: по 2 в ряд
+    # Компактная сетка кнопок (по 2 в ряд, без эмодзи)
     keyboard = []
     row = []
     for t in free:
-        row.append(InlineKeyboardButton(f"⏰ {t}", callback_data=f"book_{target_date}_{t}"))
+        row.append(InlineKeyboardButton(t, callback_data=f"book_{target_date}_{t}"))
         if len(row) == 2:
             keyboard.append(row)
             row = []
@@ -204,7 +218,7 @@ async def book_slot_handler(update: Update, context):
     free = get_free_slots(target_date)
     if time not in free:
         await query.answer("Этот слот только что заняли 😔", show_alert=True)
-        await show_calendar(query)
+        await show_calendar(update, context)
         return
 
     book_slot(target_date, time, user.id, user.username or user.full_name)
