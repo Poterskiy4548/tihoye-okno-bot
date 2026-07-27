@@ -12,6 +12,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from telegram.error import BadRequest
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
@@ -65,7 +66,6 @@ def get_free_slots(target_date: str) -> list:
 def book_slot(target_date: str, time: str, user_id: int, username: str) -> bool:
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # Проверяем, не занят ли слот
     c.execute("SELECT user_id FROM appointments WHERE date=? AND time=? AND user_id IS NOT NULL", (target_date, time))
     if c.fetchone():
         conn.close()
@@ -84,10 +84,19 @@ def cancel_slot(appointment_id: int):
     conn.close()
 
 def get_upcoming_appointments():
+    """Возвращает все будущие записи, где есть user_id."""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # Самый простой запрос: все будущие записи, где есть user_id
     c.execute("SELECT id, date, time, user_id, username FROM appointments WHERE date >= date('now') AND user_id IS NOT NULL ORDER BY date, time")
+    rows = c.fetchall()
+    conn.close()
+    return rows
+
+def get_all_appointments():
+    """Абсолютно все записи (для диагностики)."""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id, date, time, user_id, username FROM appointments ORDER BY date, time")
     rows = c.fetchall()
     conn.close()
     return rows
@@ -114,6 +123,15 @@ def update_appointment_time(app_id: int, new_time: str):
     conn.commit()
     conn.close()
 
+# ---------- Безопасное редактирование сообщений ----------
+async def safe_edit(query, text, parse_mode="HTML", reply_markup=None):
+    """Редактирует сообщение, игнорируя ошибку 'Message is not modified'."""
+    try:
+        await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=reply_markup)
+    except BadRequest as e:
+        if "Message is not modified" not in str(e):
+            raise
+
 # ---------- Главное меню ----------
 async def show_main_menu(update: Update, context):
     user = update.effective_user
@@ -136,7 +154,7 @@ async def show_main_menu(update: Update, context):
     elif update.callback_query:
         query = update.callback_query
         await query.answer()
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def start(update: Update, context):
     await show_main_menu(update, context)
@@ -155,7 +173,7 @@ async def button_handler(update: Update, context):
             "   Скидка на первую сессию не суммируется с пакетом."
         )
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back")]]
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
     elif query.data == "howto":
         text = (
             "📝 <b>Как записаться</b>\n\n"
@@ -166,7 +184,7 @@ async def button_handler(update: Update, context):
             [InlineKeyboardButton("👋 Привет, я тут", url=PSY_LINK)],
             [InlineKeyboardButton("🔙 Назад", callback_data="back")],
         ]
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
     elif query.data == "calendar":
         await show_calendar(update, context)
 
@@ -246,14 +264,14 @@ async def show_calendar(update: Update, context, year=None, month=None, day=None
             if row_slot:
                 slot_kb.append(row_slot)
             slot_kb.append([InlineKeyboardButton("🔙 К календарю", callback_data=f"cal_prev_{year}_{month}_0")])
-            await query.edit_message_text(
+            await safe_edit(
+                query,
                 f"📅 <b>{selected_date}</b>\n\nДоступное время:",
-                parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup(slot_kb)
             )
             return
 
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def calendar_day(update: Update, context):
     query = update.callback_query
@@ -282,9 +300,9 @@ async def book_slot_handler(update: Update, context):
         f"За 24 часа до встречи я пришлю напоминание."
     )
     keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="back")]]
-    await query.edit_message_text(confirm_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await safe_edit(query, confirm_text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- Админ‑панель (максимально простая) ----------
+# ---------- Админ-панель ----------
 async def admin_panel(update: Update, context):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
@@ -325,15 +343,14 @@ async def admin_edit_appointment(update: Update, context):
         [InlineKeyboardButton("⏰ Изменить время", callback_data="adm_set_time")],
         [InlineKeyboardButton("🔙 Назад", callback_data="admin")],
     ]
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def admin_set_date_start(update: Update, context):
     query = update.callback_query
     await query.answer()
     context.user_data["edit_state"] = "date"
-    await query.edit_message_text(
+    await safe_edit(query,
         "📅 Введите новую дату в формате <b>ГГГГ-ММ-ДД</b> (например, 2026-08-02):",
-        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="adm_cancel_edit")]])
     )
 
@@ -341,9 +358,8 @@ async def admin_set_time_start(update: Update, context):
     query = update.callback_query
     await query.answer()
     context.user_data["edit_state"] = "time"
-    await query.edit_message_text(
+    await safe_edit(query,
         "⏰ Введите новое время в формате <b>ЧЧ:ММ</b> (например, 15:00):",
-        parse_mode="HTML",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="adm_cancel_edit")]])
     )
 
@@ -399,10 +415,24 @@ async def cancel_appointment(update: Update, context):
     await query.answer()
     app_id = int(query.data.split("_")[1])
     cancel_slot(app_id)
-    await query.edit_message_text(
-        f"✅ Запись ID {app_id} отменена.",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Админ-панель", callback_data="admin")]])
-    )
+    await safe_edit(query, f"✅ Запись ID {app_id} отменена.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Админ-панель", callback_data="admin")]]))
+
+# ---------- Диагностическая команда для проверки записей ----------
+async def show_all_bookings(update: Update, context):
+    """Показывает ВООБЩЕ ВСЕ записи в базе (только для админов)."""
+    user = update.effective_user
+    if user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Нет доступа.")
+        return
+    rows = get_all_appointments()
+    if not rows:
+        await update.message.reply_text("База данных пуста.")
+        return
+    text = "<b>Все строки в базе:</b>\n\n"
+    for r in rows:
+        text += f"ID {r[0]}: {r[1]} {r[2]} | user={r[3]} ({r[4]})\n"
+    await update.message.reply_text(text, parse_mode="HTML")
 
 async def any_message(update: Update, context):
     if await handle_edit_input(update, context):
@@ -425,6 +455,7 @@ if __name__ == "__main__":
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
+    app.add_handler(CommandHandler("showdb", show_all_bookings))
     app.add_handler(CallbackQueryHandler(button_handler, pattern="^(prices|howto|calendar)$"))
     app.add_handler(CallbackQueryHandler(back_button, pattern="^back$"))
     app.add_handler(CallbackQueryHandler(show_calendar, pattern="^cal_"))
