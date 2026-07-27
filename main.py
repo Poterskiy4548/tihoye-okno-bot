@@ -9,7 +9,6 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
-    ConversationHandler,
     ContextTypes,
     filters,
 )
@@ -22,6 +21,12 @@ PSY_LINK = "https://t.me/Gerta_Kass?text=Привет%21%20Я%20хочу%20за�
 DB_NAME = "appointments.db"
 SLOTS_FRI = ["15:00", "16:30"]
 SLOTS_SAT = ["12:00", "13:30"]
+
+# Русские названия месяцев для календаря
+MONTHS_RU = [
+    "", "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+]
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -162,7 +167,7 @@ async def button_handler(update: Update, context):
 async def back_button(update: Update, context):
     await show_main_menu(update, context)
 
-# ---------- Календарь ----------
+# ---------- Календарь (месяцы на русском) ----------
 async def show_calendar(update: Update, context, year=None, month=None, day=None):
     if update.callback_query:
         query = update.callback_query
@@ -215,7 +220,7 @@ async def show_calendar(update: Update, context, year=None, month=None, day=None
 
     nav = [
         InlineKeyboardButton("⬅️", callback_data=f"cal_prev_{year}_{month}_0"),
-        InlineKeyboardButton(f"{cal.month_name[month]} {year}", callback_data="none"),
+        InlineKeyboardButton(f"{MONTHS_RU[month]} {year}", callback_data="none"),
         InlineKeyboardButton("➡️", callback_data=f"cal_next_{year}_{month}_0"),
     ]
     keyboard.append(nav)
@@ -274,8 +279,6 @@ async def book_slot_handler(update: Update, context):
     await query.edit_message_text(confirm_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 # ---------- Админ-панель ----------
-ADMIN_EDIT_DATE, ADMIN_EDIT_TIME = range(2)
-
 async def admin_panel(update: Update, context):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
@@ -319,64 +322,67 @@ async def admin_edit_appointment(update: Update, context):
 async def admin_set_date_start(update: Update, context):
     query = update.callback_query
     await query.answer()
-    context.user_data["admin_edit_field"] = "date"
+    context.user_data["edit_state"] = "date"
     await query.edit_message_text(
         "📅 Введите новую дату в формате <b>ГГГГ-ММ-ДД</b> (например, 2026-08-02):",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Отмена", callback_data="adm_edit_back")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="adm_cancel_edit")]])
     )
-    return ADMIN_EDIT_DATE
 
 async def admin_set_time_start(update: Update, context):
     query = update.callback_query
     await query.answer()
-    context.user_data["admin_edit_field"] = "time"
+    context.user_data["edit_state"] = "time"
     await query.edit_message_text(
         "⏰ Введите новое время в формате <b>ЧЧ:ММ</b> (например, 15:00):",
         parse_mode="HTML",
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Отмена", callback_data="adm_edit_back")]])
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ Отмена", callback_data="adm_cancel_edit")]])
     )
-    return ADMIN_EDIT_TIME
 
-async def admin_receive_new_value(update: Update, context):
-    field = context.user_data.get("admin_edit_field")
-    app_id = context.user_data.get("edit_app_id")
-    value = update.message.text.strip()
-
-    if field == "date":
-        try:
-            datetime.strptime(value, "%Y-%m-%d")
-        except ValueError:
-            await update.message.reply_text("❌ Неверный формат даты. Попробуйте ещё раз (ГГГГ-ММ-ДД):")
-            return ADMIN_EDIT_DATE
-        update_appointment_date(app_id, value)
-    elif field == "time":
-        try:
-            datetime.strptime(value, "%H:%M")
-        except ValueError:
-            await update.message.reply_text("❌ Неверный формат времени. Попробуйте ещё раз (ЧЧ:ММ):")
-            return ADMIN_EDIT_TIME
-        update_appointment_time(app_id, value)
-
-    app = get_appointment_by_id(app_id)
-    if not app:
-        await update.message.reply_text("Запись не найдена.")
-        return ConversationHandler.END
-    _, new_date, new_time, uid, uname = app
-    text = f"✅ <b>Запись ID {app_id} обновлена</b>\n\nНовая дата: {new_date}\nНовое время: {new_time}\nКлиент: {uname or uid}"
-    keyboard = [[InlineKeyboardButton("🔙 Админ-панель", callback_data="admin")]]
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
-    return ConversationHandler.END
-
-async def admin_edit_back(update: Update, context):
+async def admin_cancel_edit(update: Update, context):
     query = update.callback_query
     await query.answer()
+    context.user_data.pop("edit_state", None)
     app_id = context.user_data.get("edit_app_id")
     if app_id:
         await admin_edit_appointment(update, context)
     else:
         await admin_panel(update, context)
-    return ConversationHandler.END
+
+async def handle_edit_input(update: Update, context):
+    """Обрабатывает ввод новой даты/времени, если установлен флаг edit_state."""
+    state = context.user_data.get("edit_state")
+    app_id = context.user_data.get("edit_app_id")
+    if not state or not app_id:
+        return False  # не обработано, пойдёт в any_message
+    value = update.message.text.strip()
+    if state == "date":
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат даты. Попробуйте ещё раз (ГГГГ-ММ-ДД) или нажмите /start.")
+            return True
+        update_appointment_date(app_id, value)
+    elif state == "time":
+        try:
+            datetime.strptime(value, "%H:%M")
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат времени. Попробуйте ещё раз (ЧЧ:ММ) или нажмите /start.")
+            return True
+        update_appointment_time(app_id, value)
+    else:
+        return False
+
+    context.user_data.pop("edit_state", None)
+    app = get_appointment_by_id(app_id)
+    if not app:
+        await update.message.reply_text("Запись не найдена.")
+        return True
+    _, new_date, new_time, uid, uname = app
+    text = f"✅ <b>Запись ID {app_id} обновлена</b>\n\nНовая дата: {new_date}\nНовое время: {new_time}\nКлиент: {uname or uid}"
+    keyboard = [[InlineKeyboardButton("🔙 Админ-панель", callback_data="admin")]]
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    return True
 
 async def cancel_appointment(update: Update, context):
     query = update.callback_query
@@ -392,6 +398,10 @@ async def cancel_appointment(update: Update, context):
     )
 
 async def any_message(update: Update, context):
+    # Проверяем, не находится ли админ в режиме редактирования
+    if await handle_edit_input(update, context):
+        return
+    # Обычная заглушка для остальных
     text = (
         "🤖 Я пока умею только отвечать по кнопкам.\n"
         "Выберите команду из меню или нажмите «Привет, я тут» 👇"
@@ -408,19 +418,7 @@ if __name__ == "__main__":
         builder.proxy(proxy_url).get_updates_proxy(proxy_url)
     app = builder.build()
 
-    edit_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(admin_set_date_start, pattern="^adm_set_date$"),
-            CallbackQueryHandler(admin_set_time_start, pattern="^adm_set_time$"),
-        ],
-        states={
-            ADMIN_EDIT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_receive_new_value)],
-            ADMIN_EDIT_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_receive_new_value)],
-        },
-        fallbacks=[CallbackQueryHandler(admin_edit_back, pattern="^adm_edit_back$")],
-    )
-
-    app.add_handler(edit_conv)
+    # Регистрируем обработчики
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CallbackQueryHandler(button_handler, pattern="^(prices|howto|calendar)$"))
@@ -431,6 +429,10 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(cancel_appointment, pattern="^cancel_"))
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin$"))
     app.add_handler(CallbackQueryHandler(admin_edit_appointment, pattern="^adm_edit_"))
+    app.add_handler(CallbackQueryHandler(admin_set_date_start, pattern="^adm_set_date$"))
+    app.add_handler(CallbackQueryHandler(admin_set_time_start, pattern="^adm_set_time$"))
+    app.add_handler(CallbackQueryHandler(admin_cancel_edit, pattern="^adm_cancel_edit$"))
+    # Этот обработчик должен быть последним, чтобы перехватывать весь текст
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, any_message))
 
     app.run_polling()
