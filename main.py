@@ -13,7 +13,6 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# Несколько админов через запятую (владелец + психолог)
 ADMIN_IDS_STR = os.getenv("ADMIN_IDS", "")
 ADMIN_IDS = [int(x.strip()) for x in ADMIN_IDS_STR.split(",") if x.strip().isdigit()]
 PSY_LINK = "https://t.me/Gerta_Kass?text=Привет%21%20Я%20хочу%20записаться%20на%20консультацию"
@@ -44,7 +43,6 @@ init_db()
 
 # ---------- Вспомогательные функции ----------
 def get_free_slots(target_date: str) -> list:
-    """Возвращает свободные слоты на дату (YYYY-MM-DD)."""
     day_of_week = datetime.strptime(target_date, "%Y-%m-%d").weekday()
     if day_of_week == 4:
         all_slots = SLOTS_FRI
@@ -140,7 +138,6 @@ async def back_button(update: Update, context):
 
 # ---------- Календарь ----------
 async def show_calendar(query, offset=0):
-    """Показывает ближайшие 4 пятницы и 4 субботы."""
     today = date.today()
     dates = []
     for i in range(offset * 7, (offset + 4) * 7):
@@ -221,7 +218,7 @@ async def book_slot_handler(update: Update, context):
     keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="back")]]
     await query.edit_message_text(confirm_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- Админ-панель (доступна обоим админам) ----------
+# ---------- Админ-панель ----------
 async def admin_panel(update: Update, context):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
