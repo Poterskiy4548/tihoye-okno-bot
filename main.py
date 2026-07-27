@@ -16,22 +16,37 @@ PSY_LINK = "https://t.me/Gertakass"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🕊 <b>Тихое окно</b>\n"
-        "кабинет психолога‑консультанта\n\n"
-        "Здесь вы можете узнать стоимость сессий, свободное время "
-        "и условия записи.\n"
-        "Чтобы связаться напрямую, нажмите кнопку ниже 👇\n"
-        "или перейдите по ссылке: @Gertakass"
-    )
+# ---------- универсальная функция показа главного меню ----------
+async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает главное меню. Работает и с команды /start, и с callback-кнопки 'Назад'."""
     keyboard = [
         [InlineKeyboardButton("💰 Цены", callback_data="prices")],
         [InlineKeyboardButton("📅 Слоты", callback_data="slots")],
         [InlineKeyboardButton("📝 Как записаться", callback_data="howto")],
         [InlineKeyboardButton("💬 Написать психологу", url=PSY_LINK)],
     ]
-    await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    text = (
+        "🕊 <b>Тихое окно</b>\n"
+        "кабинет психолога-консультанта\n\n"
+        "Здесь вы можете узнать стоимость сессий, свободное время "
+        "и условия записи.\n"
+        "Чтобы связаться напрямую, нажмите кнопку ниже 👇\n"
+        "или перейдите по ссылке: @Gertakass"
+    )
+
+    # Если пришёл через команду /start (есть message) — отправляем новое сообщение
+    if update.message:
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
+    # Если пришёл через нажатие кнопки (есть callback_query) — редактируем текущее
+    elif update.callback_query:
+        query = update.callback_query
+        await query.answer()
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=reply_markup)
+
+# ---------- обработчики ----------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await show_main_menu(update, context)
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -53,7 +68,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "По будням бывают свободные окна обычно после 14:00.\n"
             "Точные свободные слоты пришлю в ЛС — напиши мне, какой день ближе."
         )
-    else:
+    else:  # howto
         text = (
             "📝 <b>Как записаться</b>\n\n"
             "Чтобы забронировать время, напишите мне в ЛС.\n"
@@ -66,9 +81,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def back_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    await start(update, context)
+    """Возврат в главное меню (редактирует текущее сообщение)."""
+    await show_main_menu(update, context)
 
 async def any_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
