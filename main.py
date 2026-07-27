@@ -11,44 +11,44 @@ from telegram.ext import (
 )
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-PSY_LINK = "https://t.me/Gertakass"
+# Ссылка на диалог с готовым текстом
+PSY_LINK = (
+    "https://t.me/Gertakass?text="
+    "Привет%E2%80%A6%20хм%2C%20даже%20не%20знаю%2C%20с%20чего%20начать.%20"
+    "Может%2C%20просто%20скажи%20что-нибудь%20спокойное%3F%20"
+    "Про%20чай%2C%20про%20облака%2C%20про%20что%20угодно.%20"
+    "Или%20вообще%20ничего%20%E2%80%94%20можно%20просто%20%C2%ABя%20тут%C2%BB.%20"
+    "Мне%20этого%20хватит%2C%20чтобы%20выдохнуть."
+)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ---------- универсальная функция показа главного меню ----------
-async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показывает главное меню. Работает и с команды /start, и с callback-кнопки 'Назад'."""
+async def show_main_menu(update: Update, context):
+    """Главное меню с кнопкой «Привет, я тут»."""
     keyboard = [
         [InlineKeyboardButton("💰 Цены", callback_data="prices")],
         [InlineKeyboardButton("📅 Слоты", callback_data="slots")],
         [InlineKeyboardButton("📝 Как записаться", callback_data="howto")],
-        [InlineKeyboardButton("💬 Написать психологу", url=PSY_LINK)],
+        [InlineKeyboardButton("👋 Привет, я тут", url=PSY_LINK)],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     text = (
         "🕊 <b>Тихое окно</b>\n"
         "кабинет психолога-консультанта\n\n"
-        "Здесь вы можете узнать стоимость сессий, свободное время "
-        "и условия записи.\n"
-        "Чтобы связаться напрямую, нажмите кнопку ниже 👇\n"
-        "или перейдите по ссылке: @Gertakass"
+        "Выберите, что вас интересует 👇\n"
+        "Или просто дайте знать, что вы здесь — нажмите «Привет, я тут»."
     )
-
-    # Если пришёл через команду /start (есть message) — отправляем новое сообщение
     if update.message:
-        await update.message.reply_text(text, parse_mode="HTML", reply_markup=reply_markup)
-    # Если пришёл через нажатие кнопки (есть callback_query) — редактируем текущее
+        await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
     elif update.callback_query:
         query = update.callback_query
         await query.answer()
-        await query.edit_message_text(text, parse_mode="HTML", reply_markup=reply_markup)
+        await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- обработчики ----------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, context):
     await show_main_menu(update, context)
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_handler(update: Update, context):
     query = update.callback_query
     await query.answer()
     if query.data == "prices":
@@ -75,21 +75,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Если все слоты заняты, оставьте контакты — я напишу, когда появится окно."
         )
     keyboard = [
-        [InlineKeyboardButton("💬 Написать психологу", url=PSY_LINK)],
+        [InlineKeyboardButton("👋 Привет, я тут", url=PSY_LINK)],
         [InlineKeyboardButton("🔙 Назад", callback_data="back")],
     ]
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def back_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Возврат в главное меню (редактирует текущее сообщение)."""
+async def back_button(update: Update, context):
     await show_main_menu(update, context)
 
-async def any_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def any_message(update: Update, context):
     text = (
         "🤖 Я пока умею только отвечать по кнопкам.\n"
-        "Выберите команду из меню или напишите напрямую психологу 👇"
+        "Выберите команду из меню или просто нажмите «Привет, я тут» 👇"
     )
-    keyboard = [[InlineKeyboardButton("💬 Написать психологу", url=PSY_LINK)]]
+    keyboard = [[InlineKeyboardButton("👋 Привет, я тут", url=PSY_LINK)]]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
 if __name__ == "__main__":
