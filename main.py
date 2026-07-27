@@ -22,7 +22,6 @@ DB_NAME = "appointments.db"
 SLOTS_FRI = ["15:00", "16:30"]
 SLOTS_SAT = ["12:00", "13:30"]
 
-# Русские названия месяцев для календаря
 MONTHS_RU = [
     "", "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
     "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
@@ -43,6 +42,8 @@ def init_db():
         username TEXT,
         booked_at TEXT
     )""")
+    # Индекс для быстрой проверки уникальности слота
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_appointments_date_time ON appointments(date, time) WHERE user_id IS NOT NULL")
     conn.commit()
     conn.close()
 
@@ -63,13 +64,20 @@ def get_free_slots(target_date: str) -> list:
     conn.close()
     return [s for s in all_slots if s not in booked]
 
-def book_slot(target_date: str, time: str, user_id: int, username: str):
+def book_slot(target_date: str, time: str, user_id: int, username: str) -> bool:
+    """Возвращает True, если бронь успешна, и False, если слот уже занят."""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    # Проверяем, не занят ли слот
+    c.execute("SELECT user_id FROM appointments WHERE date=? AND time=? AND user_id IS NOT NULL", (target_date, time))
+    if c.fetchone():
+        conn.close()
+        return False
     c.execute("INSERT INTO appointments (date, time, user_id, username, booked_at) VALUES (?,?,?,?,?)",
               (target_date, time, user_id, username, datetime.now().isoformat()))
     conn.commit()
     conn.close()
+    return True
 
 def cancel_slot(appointment_id: int):
     conn = sqlite3.connect(DB_NAME)
@@ -167,7 +175,7 @@ async def button_handler(update: Update, context):
 async def back_button(update: Update, context):
     await show_main_menu(update, context)
 
-# ---------- Календарь (месяцы на русском) ----------
+# ---------- Календарь ----------
 async def show_calendar(update: Update, context, year=None, month=None, day=None):
     if update.callback_query:
         query = update.callback_query
@@ -262,12 +270,13 @@ async def book_slot_handler(update: Update, context):
     user = query.from_user
     await query.answer()
     _, target_date, time = query.data.split("_")
-    free = get_free_slots(target_date)
-    if time not in free:
+
+    success = book_slot(target_date, time, user.id, user.username or user.full_name)
+    if not success:
         await query.answer("Этот слот только что заняли 😔", show_alert=True)
         await show_calendar(update, context)
         return
-    book_slot(target_date, time, user.id, user.username or user.full_name)
+
     date_obj = datetime.strptime(target_date, "%Y-%m-%d")
     confirm_text = (
         f"✅ <b>Запись подтверждена!</b>\n\n"
@@ -350,11 +359,10 @@ async def admin_cancel_edit(update: Update, context):
         await admin_panel(update, context)
 
 async def handle_edit_input(update: Update, context):
-    """Обрабатывает ввод новой даты/времени, если установлен флаг edit_state."""
     state = context.user_data.get("edit_state")
     app_id = context.user_data.get("edit_app_id")
     if not state or not app_id:
-        return False  # не обработано, пойдёт в any_message
+        return False
     value = update.message.text.strip()
     if state == "date":
         try:
@@ -398,10 +406,8 @@ async def cancel_appointment(update: Update, context):
     )
 
 async def any_message(update: Update, context):
-    # Проверяем, не находится ли админ в режиме редактирования
     if await handle_edit_input(update, context):
         return
-    # Обычная заглушка для остальных
     text = (
         "🤖 Я пока умею только отвечать по кнопкам.\n"
         "Выберите команду из меню или нажмите «Привет, я тут» 👇"
@@ -418,7 +424,6 @@ if __name__ == "__main__":
         builder.proxy(proxy_url).get_updates_proxy(proxy_url)
     app = builder.build()
 
-    # Регистрируем обработчики
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CallbackQueryHandler(button_handler, pattern="^(prices|howto|calendar)$"))
@@ -432,7 +437,6 @@ if __name__ == "__main__":
     app.add_handler(CallbackQueryHandler(admin_set_date_start, pattern="^adm_set_date$"))
     app.add_handler(CallbackQueryHandler(admin_set_time_start, pattern="^adm_set_time$"))
     app.add_handler(CallbackQueryHandler(admin_cancel_edit, pattern="^adm_cancel_edit$"))
-    # Этот обработчик должен быть последним, чтобы перехватывать весь текст
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, any_message))
 
     app.run_polling()
