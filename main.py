@@ -30,7 +30,7 @@ MONTHS_RU = [
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-# ---------- База данных (создаётся заново при удалении файла) ----------
+# ---------- База данных ----------
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -42,8 +42,6 @@ def init_db():
         username TEXT,
         booked_at TEXT
     )""")
-    # Индекс для гарантии уникальности слота
-    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_slot ON appointments(date, time) WHERE user_id IS NOT NULL")
     conn.commit()
     conn.close()
 
@@ -67,6 +65,7 @@ def get_free_slots(target_date: str) -> list:
 def book_slot(target_date: str, time: str, user_id: int, username: str) -> bool:
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
+    # Проверяем, не занят ли слот
     c.execute("SELECT user_id FROM appointments WHERE date=? AND time=? AND user_id IS NOT NULL", (target_date, time))
     if c.fetchone():
         conn.close()
@@ -87,7 +86,7 @@ def cancel_slot(appointment_id: int):
 def get_upcoming_appointments():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    # Выбираем только будущие даты, где есть user_id
+    # Самый простой запрос: все будущие записи, где есть user_id
     c.execute("SELECT id, date, time, user_id, username FROM appointments WHERE date >= date('now') AND user_id IS NOT NULL ORDER BY date, time")
     rows = c.fetchall()
     conn.close()
@@ -285,16 +284,18 @@ async def book_slot_handler(update: Update, context):
     keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="back")]]
     await query.edit_message_text(confirm_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- Админ-панель ----------
+# ---------- Админ‑панель (максимально простая) ----------
 async def admin_panel(update: Update, context):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
         await context.bot.send_message(user.id, "⛔ У вас нет доступа.")
         return
+
     appointments = get_upcoming_appointments()
     if not appointments:
         await context.bot.send_message(user.id, "📭 Пока нет записей.")
         return
+
     text = "<b>📋 Предстоящие записи:</b>\n\n"
     keyboard = []
     for app in appointments:
