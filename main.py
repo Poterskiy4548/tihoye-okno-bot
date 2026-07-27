@@ -123,6 +123,14 @@ def update_appointment_time(app_id: int, new_time: str):
     conn.commit()
     conn.close()
 
+def clear_all_appointments():
+    """Удаляет все записи из базы."""
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM appointments")
+    conn.commit()
+    conn.close()
+
 # ---------- Безопасное редактирование сообщений ----------
 async def safe_edit(query, text, parse_mode="HTML", reply_markup=None):
     """Редактирует сообщение, игнорируя ошибку 'Message is not modified'."""
@@ -163,7 +171,9 @@ async def start(update: Update, context):
 async def button_handler(update: Update, context):
     query = update.callback_query
     await query.answer()
-    if query.data == "prices":
+    data = query.data
+
+    if data == "prices":
         text = (
             "💰 <b>Стоимость консультаций</b>\n\n"
             "• <b>Переписка</b> (работа в выделенное время) — 1300 ₽ за сессию\n"
@@ -174,7 +184,8 @@ async def button_handler(update: Update, context):
         )
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="back")]]
         await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
-    elif query.data == "howto":
+
+    elif data == "howto":
         text = (
             "📝 <b>Как записаться</b>\n\n"
             "Чтобы забронировать время, напишите мне в ЛС.\n"
@@ -185,8 +196,12 @@ async def button_handler(update: Update, context):
             [InlineKeyboardButton("🔙 Назад", callback_data="back")],
         ]
         await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
-    elif query.data == "calendar":
+
+    elif data == "calendar":
         await show_calendar(update, context)
+
+    elif data == "admin":
+        await admin_panel(update, context)
 
 async def back_button(update: Update, context):
     await show_main_menu(update, context)
@@ -306,26 +321,67 @@ async def book_slot_handler(update: Update, context):
 async def admin_panel(update: Update, context):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
-        await context.bot.send_message(user.id, "⛔ У вас нет доступа.")
+        if update.callback_query:
+            await update.callback_query.answer("⛔ У вас нет доступа.", show_alert=True)
+        else:
+            await context.bot.send_message(user.id, "⛔ У вас нет доступа.")
         return
 
     appointments = get_upcoming_appointments()
-    if not appointments:
-        await context.bot.send_message(user.id, "📭 Пока нет записей.")
+    keyboard = []
+    if appointments:
+        text = "<b>📋 Предстоящие записи:</b>\n\n"
+        for app in appointments:
+            app_id, app_date, app_time, uid, uname = app
+            text += f"<b>ID:</b> {app_id} | {app_date} {app_time} | {uname or uid}\n"
+            row = [
+                InlineKeyboardButton(f"✏️ ID {app_id}", callback_data=f"adm_edit_{app_id}"),
+                InlineKeyboardButton(f"❌ ID {app_id}", callback_data=f"cancel_{app_id}"),
+            ]
+            keyboard.append(row)
+    else:
+        text = "📭 Пока нет записей."
+
+    # Кнопка очистки истории
+    keyboard.append([InlineKeyboardButton("🗑 Очистить историю записей", callback_data="clear_history")])
+    keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back")])
+
+    if update.callback_query:
+        query = update.callback_query
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        # Команда /admin
+        await context.bot.send_message(user.id, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def clear_history_handler(update: Update, context):
+    query = update.callback_query
+    user = query.from_user
+    if user.id not in ADMIN_IDS:
+        await query.answer("⛔ Нет доступа", show_alert=True)
         return
 
-    text = "<b>📋 Предстоящие записи:</b>\n\n"
-    keyboard = []
-    for app in appointments:
-        app_id, app_date, app_time, uid, uname = app
-        text += f"<b>ID:</b> {app_id} | {app_date} {app_time} | {uname or uid}\n"
-        row = [
-            InlineKeyboardButton(f"✏️ ID {app_id}", callback_data=f"adm_edit_{app_id}"),
-            InlineKeyboardButton(f"❌ ID {app_id}", callback_data=f"cancel_{app_id}"),
+    await query.answer()
+    # Запрашиваем подтверждение
+    keyboard = [
+        [
+            InlineKeyboardButton("✅ Да, удалить всё", callback_data="clear_confirm"),
+            InlineKeyboardButton("❌ Отмена", callback_data="admin"),
         ]
-        keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back")])
-    await context.bot.send_message(user.id, text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    ]
+    await safe_edit(query, "⚠️ Вы уверены, что хотите удалить <b>ВСЕ</b> записи из базы данных?",
+                    reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def clear_confirm_handler(update: Update, context):
+    query = update.callback_query
+    user = query.from_user
+    if user.id not in ADMIN_IDS:
+        await query.answer("⛔ Нет доступа", show_alert=True)
+        return
+
+    clear_all_appointments()
+    await query.answer("✅ История очищена.")
+    # Возвращаемся в админ-панель
+    await admin_panel(update, context)
 
 async def admin_edit_appointment(update: Update, context):
     query = update.callback_query
@@ -333,7 +389,7 @@ async def admin_edit_appointment(update: Update, context):
     app_id = int(query.data.split("_")[-1])
     app = get_appointment_by_id(app_id)
     if not app:
-        await query.edit_message_text("Запись не найдена.")
+        await safe_edit(query, "Запись не найдена.")
         return
     _, app_date, app_time, uid, uname = app
     context.user_data["edit_app_id"] = app_id
@@ -456,17 +512,18 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CommandHandler("showdb", show_all_bookings))
-    app.add_handler(CallbackQueryHandler(button_handler, pattern="^(prices|howto|calendar)$"))
+    app.add_handler(CallbackQueryHandler(button_handler, pattern="^(prices|howto|calendar|admin)$"))
     app.add_handler(CallbackQueryHandler(back_button, pattern="^back$"))
     app.add_handler(CallbackQueryHandler(show_calendar, pattern="^cal_"))
     app.add_handler(CallbackQueryHandler(calendar_day, pattern="^cal_day_"))
     app.add_handler(CallbackQueryHandler(book_slot_handler, pattern="^book_"))
     app.add_handler(CallbackQueryHandler(cancel_appointment, pattern="^cancel_"))
-    app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin$"))
     app.add_handler(CallbackQueryHandler(admin_edit_appointment, pattern="^adm_edit_"))
     app.add_handler(CallbackQueryHandler(admin_set_date_start, pattern="^adm_set_date$"))
     app.add_handler(CallbackQueryHandler(admin_set_time_start, pattern="^adm_set_time$"))
     app.add_handler(CallbackQueryHandler(admin_cancel_edit, pattern="^adm_cancel_edit$"))
+    app.add_handler(CallbackQueryHandler(clear_history_handler, pattern="^clear_history$"))
+    app.add_handler(CallbackQueryHandler(clear_confirm_handler, pattern="^clear_confirm$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, any_message))
 
     app.run_polling()
