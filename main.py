@@ -1,6 +1,7 @@
 import os
 import logging
 import sqlite3
+import calendar as cal
 from datetime import datetime, date, timedelta
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -8,6 +9,7 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     MessageHandler,
+    ConversationHandler,
     ContextTypes,
     filters,
 )
@@ -81,6 +83,28 @@ def get_upcoming_appointments():
     conn.close()
     return rows
 
+def get_appointment_by_id(app_id: int):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT id, date, time, user_id, username FROM appointments WHERE id=?", (app_id,))
+    row = c.fetchone()
+    conn.close()
+    return row
+
+def update_appointment_date(app_id: int, new_date: str):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("UPDATE appointments SET date=? WHERE id=?", (new_date, app_id))
+    conn.commit()
+    conn.close()
+
+def update_appointment_time(app_id: int, new_time: str):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("UPDATE appointments SET time=? WHERE id=?", (new_time, app_id))
+    conn.commit()
+    conn.close()
+
 # ---------- Главное меню ----------
 async def show_main_menu(update: Update, context):
     user = update.effective_user
@@ -141,75 +165,97 @@ async def back_button(update: Update, context):
     await show_main_menu(update, context)
 
 # ---------- Календарь ----------
-async def show_calendar(update: Update, context, offset=0):
-    """Рисует календарь с навигацией. offset – смещение недель."""
+async def show_calendar(update: Update, context, year=None, month=None, day=None):
+    """Календарь с сеткой дней (как настоящий)."""
     if update.callback_query:
         query = update.callback_query
         await query.answer()
-        # Если пришли из колбэка с cal_offset_, извлекаем offset из данных
-        if query.data and query.data.startswith("cal_offset_"):
-            offset = int(query.data.split("_")[-1])
+        if query.data and query.data.startswith("cal_"):
+            parts = query.data.split("_")[1:]
+            if parts[0] == "prev":
+                year, month, _ = map(int, parts[1:])
+                month -= 1
+                if month < 1: month = 12; year -= 1
+            elif parts[0] == "next":
+                year, month, _ = map(int, parts[1:])
+                month += 1
+                if month > 12: month = 1; year += 1
+            elif parts[0] == "day":
+                year, month, day = map(int, parts[1:])
+        else:
+            today = date.today()
+            year, month, _ = today.year, today.month, today.day
     else:
-        query = update.callback_query
+        today = date.today()
+        year, month, _ = today.year, today.month, today.day
 
+    cal_text = ""
+    cal_matrix = cal.monthcalendar(year, month)
+    keyboard = []
+    header = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    keyboard.append([InlineKeyboardButton(h, callback_data="none") for h in header])
     today = date.today()
-    dates = []
-    for i in range(offset * 7, (offset + 4) * 7):
-        d = today + timedelta(days=i)
-        if d.weekday() == 4 or d.weekday() == 5:
-            dates.append(d)
-
-    keyboard = []
-    for d in dates:
-        day_name = "Пт" if d.weekday() == 4 else "Сб"
-        free = get_free_slots(d.strftime("%Y-%m-%d"))
-        status = "🟢" if free else "🔴"
-        keyboard.append([InlineKeyboardButton(
-            f"{status} {day_name} {d.strftime('%d.%m')}",
-            callback_data=f"pick_{d.strftime('%Y-%m-%d')}"
-        )])
-
-    nav_buttons = []
-    if offset > 0:
-        nav_buttons.append(InlineKeyboardButton("⬅️ Раньше", callback_data=f"cal_offset_{offset - 1}"))
-    nav_buttons.append(InlineKeyboardButton("Позже ➡️", callback_data=f"cal_offset_{offset + 1}"))
-    nav_buttons.append(InlineKeyboardButton("🔙 Назад", callback_data="back"))
-    keyboard.append(nav_buttons)
-
-    text = (
-        "📅 <b>Выберите дату:</b>\n"
-        "🟢 — есть свободные слоты\n"
-        "🔴 — всё занято\n\n"
-        "Нажимайте на дату, чтобы посмотреть доступное время."
-    )
-    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def calendar_pick(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-    target_date = query.data.split("_")[1]
-    free = get_free_slots(target_date)
-    if not free:
-        await query.answer("На эту дату все слоты заняты 😔", show_alert=True)
-        return
-
-    # Компактная сетка кнопок (по 2 в ряд, без эмодзи)
-    keyboard = []
-    row = []
-    for t in free:
-        row.append(InlineKeyboardButton(t, callback_data=f"book_{target_date}_{t}"))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
+    for week in cal_matrix:
+        row = []
+        for d in week:
+            if d == 0:
+                row.append(InlineKeyboardButton(" ", callback_data="none"))
+            else:
+                cur_date = date(year, month, d)
+                day_str = f"{d:02d}"
+                if cur_date.weekday() not in (4, 5):
+                    btn_text = f"⬜{day_str}"
+                    cb = "none"
+                else:
+                    free = get_free_slots(cur_date.strftime("%Y-%m-%d"))
+                    if free:
+                        btn_text = f"🟢{day_str}"
+                        cb = f"cal_day_{year}_{month}_{d}"
+                    else:
+                        btn_text = f"🔴{day_str}"
+                        cb = f"cal_day_{year}_{month}_{d}"
+                row.append(InlineKeyboardButton(btn_text, callback_data=cb))
         keyboard.append(row)
-    keyboard.append([InlineKeyboardButton("🔙 Назад к календарю", callback_data="calendar")])
 
-    date_obj = datetime.strptime(target_date, "%Y-%m-%d")
-    day_name = "пятница" if date_obj.weekday() == 4 else "суббота"
-    text = f"📅 <b>{date_obj.strftime('%d.%m.%Y')}</b> ({day_name})\n\nДоступное время:"
+    nav = [
+        InlineKeyboardButton("⬅️", callback_data=f"cal_prev_{year}_{month}_0"),
+        InlineKeyboardButton(f"{cal.month_name[month]} {year}", callback_data="none"),
+        InlineKeyboardButton("➡️", callback_data=f"cal_next_{year}_{month}_0"),
+    ]
+    keyboard.append(nav)
+    keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="back")])
+
+    text = "📅 <b>Календарь</b>\n\nВыберите дату (пт или сб):"
+    if day:
+        selected_date = f"{year}-{month:02d}-{day:02d}"
+        free = get_free_slots(selected_date)
+        if free:
+            slot_kb = []
+            row_slot = []
+            for t in free:
+                row_slot.append(InlineKeyboardButton(t, callback_data=f"book_{selected_date}_{t}"))
+                if len(row_slot) == 2:
+                    slot_kb.append(row_slot)
+                    row_slot = []
+            if row_slot:
+                slot_kb.append(row_slot)
+            slot_kb.append([InlineKeyboardButton("🔙 К календарю", callback_data=f"cal_prev_{year}_{month}_0")])
+            await query.edit_message_text(
+                f"📅 <b>{selected_date}</b>\n\nДоступное время:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(slot_kb)
+            )
+            return
+
     await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
+async def calendar_day(update: Update, context):
+    query = update.callback_query
+    parts = query.data.split("_")
+    year, month, day = map(int, parts[2:])
+    await show_calendar(update, context, year=year, month=month, day=day)
+
+# ---------- Запись ----------
 async def book_slot_handler(update: Update, context):
     query = update.callback_query
     user = query.from_user
@@ -232,7 +278,9 @@ async def book_slot_handler(update: Update, context):
     keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="back")]]
     await query.edit_message_text(confirm_text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# ---------- Админ-панель ----------
+# ---------- Админ‑панель ----------
+ADMIN_EDIT_DATE, ADMIN_EDIT_TIME = range(2)
+
 async def admin_panel(update: Update, context):
     user = update.effective_user
     if user.id not in ADMIN_IDS:
@@ -247,12 +295,93 @@ async def admin_panel(update: Update, context):
     for app in appointments:
         app_id, app_date, app_time, uid, uname = app
         text += f"<b>ID:</b> {app_id} | {app_date} {app_time} | {uname or uid}\n"
-        keyboard.append([InlineKeyboardButton(
-            f"❌ Отменить ID {app_id} ({app_date} {app_time})",
-            callback_data=f"cancel_{app_id}"
-        )])
+        row = [
+            InlineKeyboardButton(f"✏️ ID {app_id}", callback_data=f"adm_edit_{app_id}"),
+            InlineKeyboardButton(f"❌ ID {app_id}", callback_data=f"cancel_{app_id}"),
+        ]
+        keyboard.append(row)
     keyboard.append([InlineKeyboardButton("🔙 Главное меню", callback_data="back")])
     await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def admin_edit_appointment(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+    app_id = int(query.data.split("_")[-1])
+    app = get_appointment_by_id(app_id)
+    if not app:
+        await query.edit_message_text("Запись не найдена.")
+        return
+    _, app_date, app_time, uid, uname = app
+    context.user_data["edit_app_id"] = app_id
+    text = f"✏️ <b>Редактирование ID {app_id}</b>\n\nДата: {app_date}\nВремя: {app_time}\nКлиент: {uname or uid}"
+    keyboard = [
+        [InlineKeyboardButton("📅 Изменить дату", callback_data="adm_set_date")],
+        [InlineKeyboardButton("⏰ Изменить время", callback_data="adm_set_time")],
+        [InlineKeyboardButton("🔙 Назад", callback_data="admin")],
+    ]
+    await query.edit_message_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def admin_set_date_start(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["admin_edit_field"] = "date"
+    await query.edit_message_text(
+        "📅 Введите новую дату в формате <b>ГГГГ-ММ-ДД</b> (например, 2026-08-02):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Отмена", callback_data="adm_edit_back")]])
+    )
+    return ADMIN_EDIT_DATE
+
+async def admin_set_time_start(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+    context.user_data["admin_edit_field"] = "time"
+    await query.edit_message_text(
+        "⏰ Введите новое время в формате <b>ЧЧ:ММ</b> (например, 15:00):",
+        parse_mode="HTML",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Отмена", callback_data="adm_edit_back")]])
+    )
+    return ADMIN_EDIT_TIME
+
+async def admin_receive_new_value(update: Update, context):
+    field = context.user_data.get("admin_edit_field")
+    app_id = context.user_data.get("edit_app_id")
+    value = update.message.text.strip()
+
+    if field == "date":
+        try:
+            datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат даты. Попробуйте ещё раз (ГГГГ-ММ-ДД):")
+            return ADMIN_EDIT_DATE
+        update_appointment_date(app_id, value)
+    elif field == "time":
+        try:
+            datetime.strptime(value, "%H:%M")
+        except ValueError:
+            await update.message.reply_text("❌ Неверный формат времени. Попробуйте ещё раз (ЧЧ:ММ):")
+            return ADMIN_EDIT_TIME
+        update_appointment_time(app_id, value)
+
+    app = get_appointment_by_id(app_id)
+    if not app:
+        await update.message.reply_text("Запись не найдена.")
+        return ConversationHandler.END
+    _, new_date, new_time, uid, uname = app
+    text = f"✅ <b>Запись ID {app_id} обновлена</b>\n\nНовая дата: {new_date}\nНовое время: {new_time}\nКлиент: {uname or uid}"
+    keyboard = [[InlineKeyboardButton("🔙 Админ-панель", callback_data="admin")]]
+    await update.message.reply_text(text, parse_mode="HTML", reply_markup=InlineKeyboardMarkup(keyboard))
+    return ConversationHandler.END
+
+async def admin_edit_back(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+    app_id = context.user_data.get("edit_app_id")
+    if app_id:
+        await admin_edit_appointment(update, context)
+    else:
+        await admin_panel(update, context)
+    return ConversationHandler.END
 
 async def cancel_appointment(update: Update, context):
     query = update.callback_query
@@ -266,6 +395,11 @@ async def cancel_appointment(update: Update, context):
         f"✅ Запись ID {app_id} отменена.",
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 Админ-панель", callback_data="admin")]])
     )
+
+async def admin_back_button(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+    await admin_panel(update, context)
 
 # ---------- Заглушка ----------
 async def any_message(update: Update, context):
@@ -285,15 +419,30 @@ if __name__ == "__main__":
         builder.proxy(proxy_url).get_updates_proxy(proxy_url)
     app = builder.build()
 
+    edit_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(admin_set_date_start, pattern="^adm_set_date$"),
+            CallbackQueryHandler(admin_set_time_start, pattern="^adm_set_time$"),
+        ],
+        states={
+            ADMIN_EDIT_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_receive_new_value)],
+            ADMIN_EDIT_TIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, admin_receive_new_value)],
+        },
+        fallbacks=[CallbackQueryHandler(admin_edit_back, pattern="^adm_edit_back$")],
+    )
+
+    app.add_handler(edit_conv)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("admin", admin_panel))
     app.add_handler(CallbackQueryHandler(button_handler, pattern="^(prices|howto|calendar)$"))
     app.add_handler(CallbackQueryHandler(back_button, pattern="^back$"))
-    app.add_handler(CallbackQueryHandler(show_calendar, pattern="^cal_offset_"))
-    app.add_handler(CallbackQueryHandler(calendar_pick, pattern="^pick_"))
+    app.add_handler(CallbackQueryHandler(show_calendar, pattern="^cal_"))
+    app.add_handler(CallbackQueryHandler(calendar_day, pattern="^cal_day_"))
     app.add_handler(CallbackQueryHandler(book_slot_handler, pattern="^book_"))
     app.add_handler(CallbackQueryHandler(cancel_appointment, pattern="^cancel_"))
     app.add_handler(CallbackQueryHandler(admin_panel, pattern="^admin$"))
+    app.add_handler(CallbackQueryHandler(admin_edit_appointment, pattern="^adm_edit_"))
+    app.add_handler(CallbackQueryHandler(admin_back_button, pattern="^adm_back$"))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, any_message))
 
     app.run_polling()
